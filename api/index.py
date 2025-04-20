@@ -1,63 +1,63 @@
 from flask import Flask, request, jsonify
-from gradio_client import Client
 import requests
-import os
 
 app = Flask(__name__)
-client = Client("black-forest-labs/FLUX.1-schnell")
 
-@app.route('/generate', methods=['POST'])
-def generate_image():
-    try:
-        data = request.json
+# Reddit API credentials
+CLIENT_ID = 'hnlix-XawsyMhKcSLKLScA'
+CLIENT_SECRET = 'iZDHSlFysY5AOFUkZdlvdtgTtdsBrg'
+REFRESH_TOKEN = '97946466270250-SSQZBQh0EKT_wULYQ0YjfwrNCakDyA'
+USER_AGENT = 'rithvikhacker'
 
-        prompt = data.get("prompt", "")
-        seed = data.get("seed", 42)
-        randomize_seed = data.get("randomize_seed", True)
-        width = data.get("width", 1024)
-        height = data.get("height", 1024)
-        num_inference_steps = data.get("num_inference_steps", 4)
 
-        # Step 1: Generate the image (returns a tuple, extract only file path)
-        result_tuple = client.predict(
-            prompt=prompt,
-            seed=seed,
-            randomize_seed=randomize_seed,
-            width=width,
-            height=height,
-            num_inference_steps=num_inference_steps,
-            api_name="/infer"
-        )
-        result = result_tuple[0]  # Get only the file path
+def get_access_token():
+    auth = requests.auth.HTTPBasicAuth(CLIENT_ID, CLIENT_SECRET)
+    data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': REFRESH_TOKEN
+    }
+    headers = {'User-Agent': USER_AGENT}
 
-        # Step 2: Upload to tmpfiles.org
-        if os.path.isfile(result):
-            with open(result, 'rb') as f:
-                upload_response = requests.post(
-                    'https://tmpfiles.org/api/v1/upload',
-                    files={'file': f}
-                )
+    response = requests.post('https://www.reddit.com/api/v1/access_token',
+                             auth=auth, data=data, headers=headers)
+    response.raise_for_status()
+    return response.json().get('access_token')
 
-            # Step 3: Parse the response
-            upload_json = upload_response.json()
-            tmp_url = upload_json.get("data", {}).get("url")
 
-            # Modify the URL to add "/dl" to it
-            if tmp_url:
-                modified_url = tmp_url.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/")
+def post_to_reddit(subreddit, title, text):
+    access_token = get_access_token()
+    headers = {
+        'Authorization': f'bearer {access_token}',
+        'User-Agent': USER_AGENT
+    }
+    data = {
+        'sr': subreddit,
+        'title': title,
+        'kind': 'self',
+        'text': text
+    }
+    response = requests.post('https://oauth.reddit.com/api/submit',
+                             headers=headers, data=data)
+    return response.json()
 
-                # Step 4: Delete the local file
-                os.remove(result)
 
-                return jsonify({"image_url": modified_url})
-            else:
-                return jsonify({"error": "Upload failed"}), 500
+@app.route('/post', methods=['POST'])
+def post():
+    # Get data from the request body
+    data = request.json
 
-        else:
-            return jsonify({"error": "Generated file not found"}), 500
+    # Extract parameters
+    subreddit = data.get('subreddit')
+    title = data.get('title')
+    text = data.get('text')
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if not subreddit or not title or not text:
+        return jsonify({'error': 'Missing required parameters'}), 400
+
+    # Post to Reddit
+    result = post_to_reddit(subreddit, title, text)
+
+    return jsonify(result)
 
 
 if __name__ == '__main__':
